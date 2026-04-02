@@ -1,5 +1,7 @@
-from dojo.models import Finding
+from django.conf import settings
 
+from dojo.models import Endpoint, Finding
+from dojo.tools.locations import LocationData
 
 class WazuhV4_8:
     def parse_findings(self, test, data):
@@ -17,10 +19,8 @@ class WazuhV4_8:
                 continue  # Skip if this finding has already been processed
 
             description = vuln.get("description")
-            description += "\nAgent id:" + item.get("agent").get("id")
-            description += "\nAgent name:" + item.get("agent").get("name")
             severity = vuln.get("severity")
-            cvssv3_score = vuln.get("score").get("base")
+            cvssv3_score = vuln.get("score").get("base") if vuln.get("score") else None
             publish_date = vuln.get("published_at").split("T")[0]
             detection_time = vuln.get("detected_at").split("T")[0]
             references = vuln.get("reference")
@@ -42,6 +42,14 @@ class WazuhV4_8:
                 cve + " affects (version: " + item.get("package").get("version") + ")"
             )
 
+            # Create endpoint from agent name
+            agent_name = item.get("agent").get("name")
+
+            # Prepare endpoints list (will be processed after Finding is saved)
+            endpoints = []
+            if agent_name:
+                endpoints = [Endpoint(host=agent_name)]
+
             find = Finding(
                 title=title,
                 test=test,
@@ -56,7 +64,15 @@ class WazuhV4_8:
                 unique_id_from_tool=dupe_key,
                 date=detection_time,
             )
+
+            # in some cases the agent_ip is not the perfect way on how to identify a host. Thus prefer the agent_name, if it exists.
+            if settings.V3_FEATURE_LOCATIONS:
+                find.unsaved_locations = [LocationData.url(host=agent_name)]
+            else:
+                find.unsaved_endpoints = [Endpoint(host=agent_name)]
+            
             find.unsaved_vulnerability_ids = [cve]
             dupes[dupe_key] = find
 
         return list(dupes.values())
+
